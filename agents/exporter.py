@@ -1,0 +1,278 @@
+"""
+Scholar Lens - Exporter Agent
+
+Final node in the graph.
+Takes the polished final_paper string and exports it as:
+  1. Markdown file (.md)  — clean, readable, easy to copy
+  2. PDF file (.pdf)      — via reportlab, professional format
+
+Reads from state  → final_paper, topic, citation_style
+Writes to state   → pdf_path, markdown_path
+
+No LLM needed — pure file generation.
+"""
+
+import os
+import re
+from datetime import datetime
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer,
+    HRFlowable, PageBreak
+)
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
+from state import ResearchState
+
+
+# ─────────────────────────────────────────────────────────
+# OUTPUT DIRECTORY
+# HuggingFace Spaces — write to /tmp which is writable
+# ─────────────────────────────────────────────────────────
+
+OUTPUT_DIR = "/tmp/scholar_lens_outputs"
+
+
+def _ensure_output_dir():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+def _safe_filename(topic: str) -> str:
+    """Convert topic to safe filename — remove special chars."""
+    safe = re.sub(r'[^\w\s-]', '', topic)
+    safe = re.sub(r'\s+', '_', safe).strip('_')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{safe[:40]}_{timestamp}"
+
+
+# ─────────────────────────────────────────────────────────
+# MARKDOWN EXPORT
+# ─────────────────────────────────────────────────────────
+
+def _save_markdown(final_paper: str, filename: str) -> str:
+    """Save final_paper as .md file. Returns file path."""
+    path = os.path.join(OUTPUT_DIR, f"{filename}.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(final_paper)
+    return path
+
+
+# ─────────────────────────────────────────────────────────
+# PDF EXPORT — using reportlab
+# ─────────────────────────────────────────────────────────
+
+def _build_pdf_styles():
+    """Define custom paragraph styles for academic paper layout."""
+    styles = getSampleStyleSheet()
+
+    custom = {
+        "title": ParagraphStyle(
+            "PaperTitle",
+            parent=styles["Title"],
+            fontSize=18,
+            fontName="Times-Bold",
+            spaceAfter=12,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#1a1a1a")
+        ),
+        "section_heading": ParagraphStyle(
+            "SectionHeading",
+            parent=styles["Heading1"],
+            fontSize=13,
+            fontName="Times-Bold",
+            spaceBefore=18,
+            spaceAfter=6,
+            textColor=colors.HexColor("#1a1a1a"),
+            borderPad=4,
+        ),
+        "body": ParagraphStyle(
+            "BodyText",
+            parent=styles["Normal"],
+            fontSize=11,
+            fontName="Times-Roman",
+            leading=16,             # Line spacing
+            spaceAfter=8,
+            alignment=TA_JUSTIFY,   # Academic papers are justified
+        ),
+        "abstract_body": ParagraphStyle(
+            "AbstractBody",
+            parent=styles["Normal"],
+            fontSize=10,
+            fontName="Times-Italic",
+            leading=14,
+            leftIndent=36,
+            rightIndent=36,
+            spaceAfter=6,
+            alignment=TA_JUSTIFY,
+        ),
+        "keywords": ParagraphStyle(
+            "Keywords",
+            parent=styles["Normal"],
+            fontSize=10,
+            fontName="Times-Italic",
+            leftIndent=36,
+            spaceAfter=12,
+        ),
+        "reference": ParagraphStyle(
+            "Reference",
+            parent=styles["Normal"],
+            fontSize=10,
+            fontName="Times-Roman",
+            leading=13,
+            leftIndent=24,
+            firstLineIndent=-24,    # Hanging indent for references
+            spaceAfter=6,
+        ),
+        "meta": ParagraphStyle(
+            "Meta",
+            parent=styles["Normal"],
+            fontSize=10,
+            fontName="Times-Roman",
+            textColor=colors.HexColor("#666666"),
+            alignment=TA_CENTER,
+            spaceAfter=4,
+        ),
+    }
+    return custom
+
+
+def _parse_markdown_to_pdf_elements(final_paper: str, styles: dict) -> list:
+    """
+    Parses the markdown final_paper string into reportlab flowables.
+    Handles: # Title, ## Sections, regular paragraphs, **bold** keywords line.
+    """
+    elements = []
+    lines = final_paper.split("\n")
+    i = 0
+
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # ── Paper title (# heading) ──────────────────────
+        if line.startswith("# ") and not line.startswith("## "):
+            title_text = line[2:].strip()
+            elements.append(Spacer(1, 0.2 * inch))
+            elements.append(Paragraph(title_text, styles["title"]))
+            elements.append(Spacer(1, 0.1 * inch))
+            # Add generation metadata
+            elements.append(Paragraph(
+                f"Generated by Scholar Lens · {datetime.now().strftime('%B %d, %Y')}",
+                styles["meta"]
+            ))
+            elements.append(HRFlowable(width="100%", thickness=1,
+                                        color=colors.HexColor("#cccccc")))
+            elements.append(Spacer(1, 0.2 * inch))
+
+        # ── Section headings (## heading) ────────────────
+        elif line.startswith("## "):
+            heading_text = line[3:].strip()
+            elements.append(Paragraph(heading_text, styles["section_heading"]))
+
+            # Abstract section gets special indented style
+            if heading_text.lower() == "abstract":
+                i += 1
+                while i < len(lines) and not lines[i].startswith("##"):
+                    content = lines[i].strip()
+                    if content.startswith("**Keywords"):
+                        elements.append(Paragraph(
+                            content.replace("**", ""),
+                            styles["keywords"]
+                        ))
+                    elif content and not content.startswith("---"):
+                        elements.append(Paragraph(content, styles["abstract_body"]))
+                    i += 1
+                continue
+
+            # References section gets hanging indent style
+            if heading_text.lower() == "references":
+                i += 1
+                while i < len(lines):
+                    ref = lines[i].strip()
+                    if ref and not ref.startswith("##") and not ref.startswith("---"):
+                        elements.append(Paragraph(ref, styles["reference"]))
+                    elif ref.startswith("##"):
+                        break
+                    i += 1
+                continue
+
+        # ── Horizontal rule ──────────────────────────────
+        elif line == "---":
+            elements.append(Spacer(1, 0.1 * inch))
+            elements.append(HRFlowable(width="100%", thickness=0.5,
+                                        color=colors.HexColor("#dddddd")))
+            elements.append(Spacer(1, 0.1 * inch))
+
+        # ── Regular body paragraph ───────────────────────
+        elif line and not line.startswith("---"):
+            # Escape XML special chars for reportlab
+            safe_line = (line
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("**", "")   # strip markdown bold
+            )
+            elements.append(Paragraph(safe_line, styles["body"]))
+
+        i += 1
+
+    return elements
+
+
+def _save_pdf(final_paper: str, topic: str, filename: str) -> str:
+    """Generate academic PDF using reportlab. Returns file path."""
+    path = os.path.join(OUTPUT_DIR, f"{filename}.pdf")
+
+    doc = SimpleDocTemplate(
+        path,
+        pagesize=letter,
+        rightMargin=1 * inch,
+        leftMargin=1 * inch,
+        topMargin=1 * inch,
+        bottomMargin=1 * inch,
+        title=topic,
+        author="Scholar Lens",
+        subject=topic,
+    )
+
+    styles  = _build_pdf_styles()
+    elements = _parse_markdown_to_pdf_elements(final_paper, styles)
+
+    doc.build(elements)
+    return path
+
+
+# ─────────────────────────────────────────────────────────
+# EXPORTER NODE
+# ─────────────────────────────────────────────────────────
+
+def exporter_node(state: ResearchState) -> dict:
+    """
+    Final node — exports the complete paper as Markdown and PDF.
+    No LLM needed — pure file generation.
+    """
+    _ensure_output_dir()
+
+    topic       = state["topic"]
+    final_paper = state["final_paper"]
+    filename    = _safe_filename(topic)
+
+    # Save Markdown
+    md_path  = _save_markdown(final_paper, filename)
+
+    # Save PDF
+    pdf_path = _save_pdf(final_paper, topic, filename)
+
+    status_msg = (
+        f"🎉 Paper exported successfully!\n"
+        f"  📄 Markdown: {md_path}\n"
+        f"  📑 PDF: {pdf_path}"
+    )
+
+    return {
+        "pdf_path":      pdf_path,
+        "markdown_path": md_path,
+        "status":        status_msg,
+        "messages": [{"role": "assistant", "content": status_msg}]
+    }
