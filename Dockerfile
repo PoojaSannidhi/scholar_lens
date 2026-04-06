@@ -12,11 +12,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-
-# Install requirements first, then pin gradio to 5.x explicitly
-# HuggingFace injects gradio 6 — we override it here
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir "gradio==5.25.0" --force-reinstall
+RUN pip install --no-cache-dir -r requirements.txt
 
 RUN playwright install chromium
 RUN playwright install-deps chromium
@@ -29,5 +25,7 @@ USER user
 EXPOSE 7860
 
 ENV PYTHONPATH=/app
+# Tell HF not to inject its own packages
+ENV SYSTEM=spaces
 
 CMD ["python", "app.py"]

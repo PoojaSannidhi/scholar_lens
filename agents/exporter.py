@@ -21,7 +21,7 @@ from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer,
-    HRFlowable, PageBreak
+    HRFlowable
 )
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 from state import ResearchState
@@ -32,7 +32,7 @@ from state import ResearchState
 # HuggingFace Spaces — write to /tmp which is writable
 # ─────────────────────────────────────────────────────────
 
-OUTPUT_DIR = "/tmp/scholar_lens_outputs"
+OUTPUT_DIR = os.path.join(os.getcwd(), "outputs")
 
 
 def _ensure_output_dir():

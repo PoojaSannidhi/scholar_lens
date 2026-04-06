@@ -1,8 +1,9 @@
 ---
-title: scholar_lens
-app_file: app.py
-sdk: gradio
-sdk_version: 5.31.0
+title: Scholar-lens
+colorFrom: yellow
+colorTo: gray
+sdk: docker
+pinned: false
 ---
 # 🎓 Scholar Lens
 

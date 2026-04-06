@@ -5,7 +5,10 @@ Defines all nodes, edges, conditional routing, and checkpointing.
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
+import sqlite3
 from langgraph.constants import Send
+import os
 
 from state import ResearchState
 from agents.planner import planner_node
@@ -185,11 +188,25 @@ def build_graph():
     # ── Export → END ────────────────────────────────────
     builder.add_edge("exporter_node", END)
 
-    # ── MemorySaver Checkpointer ─────────────────────────
-    # Using in-memory checkpointing for local development
-    # Avoids sqlite3 disk I/O errors from suspended processes
-    # For HuggingFace deployment: switch back to SqliteSaver
-    checkpointer = MemorySaver()
+    # ── SqliteSaver Checkpointer ────────────────────────
+    # Persists graph state after every node to SQLite
+    # User can reload page → BrowserState restores thread_id
+    # → SQLite loads checkpoint → session resumes exactly
+    # /tmp is writable on both local dev and HuggingFace Docker
+    try:
+    
+        DB_PATH = os.getenv("DB_PATH", "scholar_lens.db")
+
+        conn = sqlite3.connect(
+    DB_PATH,
+    check_same_thread=False,
+    isolation_level=None   # ✅ better concurrency
+)
+    
+        checkpointer = SqliteSaver(conn)
+    except Exception:
+        # Fallback to in-memory if SQLite fails
+        checkpointer = MemorySaver()
 
     return builder.compile(
         checkpointer=checkpointer,
